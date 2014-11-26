@@ -36,6 +36,7 @@ var vm = require('vm');
 var wd_sandbox = require('wd_sandbox');
 var webdriver = require('selenium-webdriver');
 var webdriver_http = require('selenium-webdriver/http');
+var url = require('url');
 
 /** Allow tests to stub out. */
 exports.process = process;
@@ -793,11 +794,43 @@ WebDriverServer.prototype.runPageLoad_ = function(browserCaps) {
           this.timeout_ - (exports.WAIT_AFTER_ONLOAD_MS + SUBMIT_TIMEOUT_MS_));
     }
     this.onTestStarted_();
+    if(this.task_.cookies)
+    {
+        var cookieString = "";
+
+        for(var i = 0; i < this.task_.cookies.length; i++)
+        {
+            if(this.includeCookie_(url.parse(this.task_.url), this.task_.cookies[i].path))
+            {
+                cookieString += this.task_.cookies[i].value + " ";
+            }
+        }
+
+        this.networkCommand_('setExtraHTTPHeaders', { headers : { Cookie : cookieString.trim() }});
+        logger.debug("Setting cookie header: " + cookieString);
+    }
+
     this.pageCommand_('navigate', {url: this.task_.url});
     return this.pageLoadDonePromise_.promise;
   }.bind(this));
   this.waitForCoalesce_(webdriver, exports.WAIT_AFTER_ONLOAD_MS);
 };
+
+WebDriverServer.prototype.includeCookie_ = function(urlObj, cookiePath)
+{
+    if(cookiePath.charAt(0) == "/") // cookiePath is path
+    {
+        return urlObj.pathname.indexOf(cookiePath) > -1;
+    }
+
+    var domain = cookiePath;
+    if(cookiePath.charAt(0) == ".")
+    {
+        domain = cookiePath.substring(1, cookiePath.length);
+    }
+
+    return urlObj.hostname.indexOf(domain) > -1;
+}
 
 /**
  * Runs the user script in a sandboxed environment.

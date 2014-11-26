@@ -82,6 +82,8 @@ var SIGNAL_NAMES = [SIGQUIT, SIGABRT, SIGTERM, SIGINT];
  *   zipResultFiles map of filenames to Buffer objects, to send as result.zip.
  *   error an error object if the job failed.
  *
+ *   NEW: eventName eventName set by setEventName script command
+ *
  * The constructor does some input validation and throws an Error, but it
  * would not report the error back to the WPT server, because Client.currentJob_
  * is not yet set -- the error would only get logged.
@@ -113,6 +115,7 @@ function Job(client, task) {
   this.resultFiles = [];
   this.zipResultFiles = {};
   this.error = undefined;
+  this.eventName = undefined;
 }
 /** Public class. */
 exports.Job = Job;

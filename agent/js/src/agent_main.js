@@ -158,7 +158,8 @@ Agent.prototype.scheduleProcessDone_ = function(ipcMsg, job) {
     // Don't care about WPR recording run results, unless it's an error.
     this.scheduleNoFault_('Process job results', function() {
       if (ipcMsg.devToolsMessages) {
-        job.zipResultFiles['devtools.json'] =
+          ipcMsg.devToolsMessages.unshift({"method":"setEventName","params":job.eventName})
+          job.zipResultFiles['devtools.json'] =
             JSON.stringify(ipcMsg.devToolsMessages);
       }
       if (ipcMsg.screenshots && ipcMsg.screenshots.length > 0) {
@@ -253,10 +254,15 @@ Agent.prototype.startJobRun_ = function(job) {
   var script = job.task.script;
   var url = job.task.url;
   var pac;
+  var cookies = {};
   if (script && !/new\s+(\S+\.)?Builder\s*\(/.test(script)) {
-    var urlAndPac = this.decodeUrlAndPacFromScript_(script);
-    url = urlAndPac.url;
-    pac = urlAndPac.pac;
+    var urlPac = this.decodeUrlAndPacFromScript_(script);
+    url = urlPac.url;
+    pac = urlPac.pac;
+    var eventNameAndCookies = this.decodeEventNameAndCookiesFromScript_(script);
+    job.eventName =  eventNameAndCookies.eventName;
+    cookies = eventNameAndCookies.cookies;
+
     script = undefined;
   }
   url = url.trim();
@@ -285,6 +291,10 @@ Agent.prototype.startJobRun_ = function(job) {
     if (!!pac) {
       task.pac = pac;
     }
+    if(!!cookies) {
+        task.cookies = cookies;
+    }
+
     var exitWhenDone = job.isFirstViewOnly || job.isCacheWarm;
     if (0 === job.runNumber) {  // Recording run
       exitWhenDone = true;
@@ -374,6 +384,8 @@ ScriptError.prototype = new Error();
  * deprecated and these commands will be rejected in a future.  Any other input
  * will throw a ScriptError.
  *
+ * NEW: setEventName & setCookie will be ignored and evaluated in decodeEventNameAndCookiesFromScript_
+ *
  * @param {string} script e.g.:
  *   setDnsName fromHost toHost
  *   navigate url.
@@ -384,13 +396,13 @@ ScriptError.prototype = new Error();
 Agent.prototype.decodeUrlAndPacFromScript_ = function(script) {
   'use strict';
   // Assign nulls to appease 'possibly uninitialized' warnings.
-  var fromHost = null, toHost = null, proxy = null, url = null;
+  var fromHost = "foo.com", toHost = "ignored.com", proxy = null, url = null;
   script.split('\n').forEach(function(line, lineNumber) {
     line = line.trim();
     if (!line || 0 === line.indexOf('//')) {
       return;
     }
-    if (line.match(/^(if|endif|addHeader)\s/i)) {
+    if (line.match(/^(if|endif|addHeader|setEventName|setCookie)\s/i)) {
       return;
     }
     var m = line.match(/^setDnsName\s+(\S+)\s+(\S+)$/i);
@@ -426,6 +438,62 @@ Agent.prototype.decodeUrlAndPacFromScript_ = function(script) {
       '  }\n' +
       '  return "DIRECT";\n}\n'};
 };
+
+Agent.prototype.decodeEventNameAndCookiesFromScript_ = function(script)
+{
+    'use strict';
+
+    var eventNameAndCookies = {
+        eventName : null,
+        cookies : []
+    };
+
+    script.split('\n').forEach(function(line, lineNumber) {
+        line = line.trim();
+        if (!line || 0 === line.indexOf('//')) {
+            return;
+        }
+
+        var m = line.match(/^setEventName\s+(\S+)$/i);
+        if(m && ! eventNameAndCookies.eventName)
+        {
+            eventNameAndCookies.eventName = m[1];
+            return;
+        }
+
+        // match: setCookie	http://www.aol.com	TestData=Test;
+        m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
+        if(m)
+        {
+            eventNameAndCookies.cookies.push({
+                path  : m[1],
+                value : m[2]
+            });
+
+            return;
+        }
+
+        // match: setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT
+        m = line.match(/^setCookie\s+(\S+)\s+(\S+)\s+expires=(.*)$/i);
+        if(m)
+        {
+            var expireDate = new Date(m[3]);
+
+            // only accept cookies that are not expired
+            if(expireDate > new Date())
+            {
+                eventNameAndCookies.cookies.push({
+                    path    : m[1],
+                    value   : m[2]
+                });
+            }
+
+            return;
+        }
+    });
+
+    return eventNameAndCookies;
+}
 
 /**
  * @param {Object} job the job to abort (e.g. due to timeout).
