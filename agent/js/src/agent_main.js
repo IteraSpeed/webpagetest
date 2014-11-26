@@ -245,6 +245,7 @@ Agent.prototype.startJobRun_ = function(job) {
       }.bind(this));
     }
 
+
     this.startTrafficShaper_(job);
 
     this.startWdServer_(job);
