@@ -160,7 +160,8 @@ Agent.prototype.scheduleProcessDone_ = function(ipcMsg, job) {
       if (ipcMsg.devToolsMessages) {
           ipcMsg.devToolsMessages.unshift({"method":"setEventName","params":job.eventName})
           job.zipResultFiles['devtools.json'] =
-            JSON.stringify(ipcMsg.devToolsMessages);
+            //JSON.stringify(ipcMsg.devToolsMessages);
+              JSON.stringify(ipcMsg.steps);
       }
       if (ipcMsg.screenshots && ipcMsg.screenshots.length > 0) {
         var imageDescriptors = [];
@@ -246,28 +247,33 @@ Agent.prototype.startJobRun_ = function(job) {
       }.bind(this));
     }
 
-
     this.startTrafficShaper_(job);
 
     this.startWdServer_(job);
-  }
-  var script = job.task.script;
-  var url = job.task.url;
-  var pac;
-  var cookies = {};
-  if (script && !/new\s+(\S+\.)?Builder\s*\(/.test(script)) {
-    var urlPac = this.decodeUrlAndPacFromScript_(script);
-    url = urlPac.url;
-    pac = urlPac.pac;
-    var eventNameAndCookies = this.decodeEventNameAndCookiesFromScript_(script);
-    job.eventName =  eventNameAndCookies.eventName;
-    cookies = eventNameAndCookies.cookies;
+      /*var script = job.task.script;
+       var url = job.task.url;
 
-    script = undefined;
-  }
-  url = url.trim();
-  if (!((/^https?:\/\//i).test(url))) {
-    url = 'http://' + url;
+       if (script && !/new\s+(\S+\.)?Builder\s*\(/.test(script))
+       {
+       this.runScript_(script);
+       }
+
+       var pac;
+       var cookies = {};
+       if (script && !/new\s+(\S+\.)?Builder\s*\(/.test(script)) {
+       var urlPac = this.decodeUrlAndPacFromScript_(script);
+       url = urlPac.url;
+       pac = urlPac.pac;
+       var eventNameAndCookies = this.decodeEventNameAndCookiesFromScript_(script);
+       job.eventName =  eventNameAndCookies.eventName;
+       cookies = eventNameAndCookies.cookies;
+
+       script = undefined;
+       }
+       url = url.trim();
+       if (!((/^https?:\/\//i).test(url))) {
+       url = 'http://' + url;
+       }*/
   }
   this.scheduleNoFault_('Send IPC "run"', function() {
     // Copy our flags and task
@@ -280,7 +286,7 @@ Agent.prototype.startJobRun_ = function(job) {
       task[key] = job.task[key];
     }.bind(this));
     // Override some task fields:
-    if (!!script) {
+    /*if (!!script) {
       task.script = script;
     } else {
       delete task.script;
@@ -293,7 +299,7 @@ Agent.prototype.startJobRun_ = function(job) {
     }
     if(!!cookies) {
         task.cookies = cookies;
-    }
+    }*/
 
     var exitWhenDone = job.isFirstViewOnly || job.isCacheWarm;
     if (0 === job.runNumber) {  // Recording run
@@ -493,6 +499,132 @@ Agent.prototype.decodeEventNameAndCookiesFromScript_ = function(script)
     });
 
     return eventNameAndCookies;
+}
+
+Agent.prototype.runScript_ = function(script)
+{
+    // saves the headers and cookies for the script runtime
+    var headers = {
+        cookies : [],
+        headers : [],
+        hasChanged : false
+    };
+    var currentStep = {
+        eventName : null,
+        logData : true,
+        result : null
+    };
+
+    script.split('\n').forEach(function(line, lineNumber) {
+        line = line.trim();
+
+        var m = line.match(/^navigate\s+(\S+)$/i);
+        if(m)
+        {
+            return;
+        }
+
+        m = line.match(/^setEventName\s+(\S+)$/i);
+        if(m)
+        {
+            if(currentStep.eventName)
+            {
+                currentStep = {
+                    eventName : m[1],
+                    logData : true,
+                    result : null
+                };
+            }
+            else
+            {
+                currentStep.eventName = m[1];
+            }
+            return;
+        }
+        // TODO: Cookie and headers change must trigger a new Network.setExtraHTTPHeaders
+        // match: setCookie	http://www.aol.com	TestData=Test;
+        m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
+        if(m)
+        {
+            headers.cookies.push({
+                path  : m[1],
+                value : m[2]
+            });
+
+            headers.hasChanged = true;
+
+            return;
+        }
+
+        // match: setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT
+        m = line.match(/^setCookie\s+(\S+)\s+(\S+)\s+expires=(.*)$/i);
+        if(m)
+        {
+            var expireDate = new Date(m[3]);
+
+            // only accept cookies that are not expired
+            if(expireDate > new Date())
+            {
+                headers.cookies.push({
+                    path  : m[1],
+                    value : m[2]
+                });
+
+                headers.hasChanged = true;
+            }
+
+            return;
+        }
+
+        // match: setHeader header: value
+        m = line.match(/^setHeader\s+(\S+):\s(.*)$/i);
+        if(m)
+        {
+            return;
+        }
+
+        m = line.match(/^addHeader\s+(\S+):\s(.*)$/i);
+        if(m)
+        {
+            headers.headers.push({
+                header : m[1],
+                value : m[2]
+            });
+
+            headers.hasChanged = true;
+
+            return;
+        }
+
+        m = line.match(/^resetHeaders$/i)
+        if(m)
+        {
+            headers.headers = [];
+            headers.hasChanged = true;
+
+            return;
+        }
+
+        m = line.match(/^logData\s+(\d)$/i);
+        if(m)
+        {
+            currentStep.logData = !!m[1];
+            return;
+        }
+
+        m = line.match(/^exec\s+(.*)$/i);
+        if(m)
+        {
+            return;
+        }
+
+        m = line.match(/^execAndWait\s+(.*)$/i);
+        if(m)
+        {
+            return;
+        }
+
+    });
 }
 
 /**
