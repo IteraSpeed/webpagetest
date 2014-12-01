@@ -880,52 +880,79 @@ WebDriverServer.prototype.createExecScript_ = function(script)
       activityTimeout = 2000, // timeout for result collection
       self = this;            // self reference
 
-  var initialPromise = new webdriver.promise.Deferred(), // start of promise chain
-      currentPromise = initialPromise;                   // the promise to append a fulfill listener to
+  var deferred = new webdriver.promise.Deferred(),
+      initialPromise = deferred.promise, // start of promise chain
+      currentPromise = initialPromise;   // the promise to append a fulfill listener to
 
   script.split('\n').forEach(function(line, lineNumber)
   {
     line = line.trim();
-    // new promise for next script step
+
+    // deferred which will be fulfilled when the devTools messages have
+    // been collected.
     var newDeferred = new webdriver.promise.Deferred();
+
+    // triggers a change page event (either navigate or execAndWait)
+    // and waits for the page.onLoad event by setting the
+    // pageLoadDonePromise_ of this server and registering a fulfill
+    // listener on it.
+    var changePageResolver = function(server, step, defer, changePageTriggerFn)
+    {
+      var cleanupAndFulfill = function()
+      {
+        logger.debug("cleanup and fulfill");
+        server.devToolsMessages_ = [];
+        server.pageLoadDonePromise_ = undefined;
+        defer.fulfill(true);
+      }
+
+      // if the page.onLoad event has fired, this function will collect the
+      // devToolsMessages_ in the result field of the current step.
+      var collectDevToolsMessages = function()
+      {
+        logger.debug("Write of devTools messages: Step exists: " + JSON.stringify(step));
+
+        if(step.logData)
+        {
+          logger.debug("Setting timeout(" + activityTimeout + " ms) for collection devtools message");
+
+          var delayed = webdriver.promise.ControlFlow.timeout(
+              activityTimeout, "Waiting (" + activityTimeout + " ms)");
+
+          delayed.then(function()
+          {
+            step.result = server.devToolsMessages_;
+            logger.debug("Written results: " + step.result);
+            cleanupAndFulfill();
+
+          });
+        }
+        else
+        {
+          logger.debug("Not writing devtools");
+          cleanupAndFulfill();
+        }
+      };
+
+      // wait for page.onLoad
+      this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
+      this.pageLoadDonePromise_.then(collectDevToolsMessages);
+
+      changePageTriggerFn();
+
+      // trigger navigate
+    }.bind(self);
 
     var m = line.match(/^navigate\s+(\S+)$/i);
     if(m)
     {
-      // triggers a navigate and waits for the page.onLoad event
-      // by setting the pageLoadDonePromise_ of this server and
-      // registering a fulfill listener on it.
-      var navigateResolver = function()
+      var navigate = function()
       {
-        // if the page.onLoad event has fired, this function will collect the
-        // devToolsMessages_ in the currentStep his result.
-        var collectDevToolsMessages = function()
-        {
-          logger.debug("Write of devTools messages");
-          logger.debug("Step exists: " + !!currentStep);
-
-          if(currentStep.logData)
-          {
-            currentStep.result = this.devToolsMessages_;
-            logger.debug("Written results: " + currentStep.result);
-          }
-
-          this.devToolsMessages_ = [];
-          this.pageLoadDonePromise_ = undefined;
-          newDeferred.fulfill(true);
-
-        }.bind(this);
-
-        // wait for page.onLoad
-        this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
-        this.pageLoadDonePromise_.then(collectDevToolsMessages);
-
-        // trigger navigate
         this.pageCommand_('navigate', { url: m[1] } );
       }.bind(self);
 
-      currentPromise.then(navigateResolver);
-      currentPromise = newDeferred;
+      currentPromise.then(changePageResolver(self, currentStep, newDeferred, navigate));
+      currentPromise = newDeferred.promise;
 
       return;
     }
@@ -946,7 +973,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     }
 
     // adds a cookie to the header
-    function addCookie(m)
+    var addCookie = function(m)
     {
       cookieHeaders.push({
         path  : m[1],
@@ -956,22 +983,14 @@ WebDriverServer.prototype.createExecScript_ = function(script)
       // for the next time a request is executed, use the current set of cookies
       additionalHeaders['Cookie'] = self.stringifyCookieList_(cookieHeaders);
 
-      // promise fulfiller
-      var setCookieHeader = function()
-      {
-        this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-        newDeferred.fulfill(true);
-      }.bind(self);
-
-      currentPromise.then(setCookieHeader);
-      currentPromise = newDeferred;
-    }
+      return this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
+    }.bind(self);
 
     // match: setCookie	http://www.aol.com	TestData=Test;
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
     if(m)
     {
-      addCookie(m);
+      currentPromise = addCookie(m);
       return;
     }
 
@@ -980,7 +999,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     if(m)
     {
       // only accept cookies that are not expired
-      if(new Date(m[3]) > new Date()) { addCookie(m); }
+      if(new Date(m[3]) > new Date()) { currentPromise = addCookie(m); }
       return;
     }
 
@@ -990,15 +1009,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     {
       additionalHeaders[m[1]] = m[2];
 
-      var setHeaders = function()
-      {
-        this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-        newDeferred.fulfill(true);
-      }.bind(self);
-
-      currentPromise.then(setHeaders);
-      currentPromise = newDeferred;
-
+      currentPromise = this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
       return;
     }
 
@@ -1009,14 +1020,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
       {
         additionalHeaders[m[1]] = m[2];
 
-        var addHeaders = function()
-        {
-          this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-          newDeferred.fulfill(true);
-        }.bind(self);
-
-        currentPromise.then(addHeaders);
-        currentPromise = newDeferred;
+        currentPromise = this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
       }
 
       return;
@@ -1026,16 +1030,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     if(m)
     {
       additionalHeaders = {};
-
-      var resetHeaders = function()
-      {
-        this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-        newDeferred.fulfill(true);
-      }.bind(self);
-
-      currentPromise.then(resetHeaders);
-      currentPromise = newDeferred;
-
+      currentPromise = this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
       return;
     }
 
@@ -1049,49 +1044,20 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     m = line.match(/^exec\s+(.*)$/i);
     if(m)
     {
-      var exec = function()
-      {
-        this.runtimeCommand_( 'evaluate', { expression : m[1] } );
-        newDeferred.fulfill(true);
-      }.bind(self);
-
-      currentPromise.then(exec);
-      currentPromise = newDeferred;
-
+      currentPromise = this.runtimeCommand_( 'evaluate', { expression : m[1] } );;
       return;
     }
 
     m = line.match(/^execAndWait\s+(.*)$/i);
     if(m)
     {
-      var execAndWaitResolver = function()
+      var execAndWait = function()
       {
-        var collectDevToolsMessages = function()
-        {
-          logger.debug("Write of devTools messages");
-          logger.debug("Step exists: " + currentStep.step);
-
-          currentStep.result = this.devToolsMessages_;
-          this.devToolsMessages_ = [];
-          this.pageLoadDonePromise_ = undefined;
-
-          logger.debug("Written results: " + currentStep.result);
-
-          // call next step
-          newDeferred.fulfill(true);
-
-        }.bind(this);
-
-        // wait for page.onLoad
-        this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
-        this.pageLoadDonePromise_.then(collectDevToolsMessages);
-
-        // trigger exec
         this.runtimeCommand_( 'evaluate', { expression : m[1] } );
       }.bind(self);
 
-      currentPromise.then(execAndWaitResolver);
-      currentPromise = newDeferred;
+      currentPromise.then(changePageResolver(self, currentStep, newDeferred, execAndWait));
+      currentPromise = newDeferred.promise;
 
       return;
     }
@@ -1099,7 +1065,7 @@ WebDriverServer.prototype.createExecScript_ = function(script)
     logger.warn("Unsupported script command (will be ignored): " + line);
   });
 
-  return { init : initialPromise,
+  return { init : deferred,
            last : currentPromise };
 };
 
