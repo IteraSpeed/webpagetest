@@ -928,6 +928,8 @@ WebDriverServer.prototype.execScript_ = function(script)
 
     }.bind(self);
 
+    // Create a chain of schedules to change a page and log the
+    // resulting devTools messages.
     var changePage = function(step, cmd, descr)
     {
       this.app_.schedule(
