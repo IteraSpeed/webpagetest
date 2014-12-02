@@ -856,7 +856,10 @@ WebDriverServer.prototype.runScriptedTask_ = function(browserCaps)
 };
 
 /**
- * Translates a wpt script to a chain schedules.
+ * Translates a wpt script to a chain of schedules.
+ *
+ * Why does that work?
+ * @see https://sites.google.com/a/webpagetest.org/docs/private-instances/node-js-agent/async-js
  *
  * @param script
  * @private
@@ -867,49 +870,103 @@ WebDriverServer.prototype.execScript_ = function(script)
 
   var currentStep = null,     // reference pointer to the current step
       additionalHeaders = {}, // map of headers to append to a request
-      cookieHeaders = [],     // cookies, that will be set in the request header list
       activityTimeout = 2000, // timeout for result collection
       self = this;            // self reference
+
+  var Cookies = {
+    cs : [],
+    addCookie : function(pathValueArray)
+    {
+      this.cs.push({
+        path  : pathValueArray[1],
+        value : pathValueArray[2]
+      });
+    },
+    toString : function()
+    {
+      var cookieString = "";
+
+      for(var i = 0; i < this.cs.length; i++)
+      {
+        cookieString += this.cs[i].value + " ";
+      }
+
+      return cookieString.trim();
+    }
+  };
 
   script.split('\n').forEach(function(line, lineNumber)
   {
     line = line.trim();
 
-    // triggers a change page event (either navigate or execAndWait)
-    // and waits for the page.onLoad event by setting the
-    // pageLoadDonePromise_ of this server and registering a fulfill
-    // listener on it.
+    // Executes an action that eventually changes the page of the browser.
+    // The app schedule will resume execution, if the Page.onLoad Event
+    // have been fired (for this, we set the pageLoadDonePromise_)
     var changePageResolver = function(changePageTriggerFn)
     {
       // wait for page.onLoad
       this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
 
-      changePageTriggerFn();
+      // set current list of cookies as header
+      var cookieStr = Cookies.toString();
+      if(cookieStr.length > 0)
+      {
+        additionalHeaders['Cookie'] = cookieStr;
+      }
+      else
+      {
+        delete additionalHeaders['Cookie'];
+      }
+
+      // set headers for next request
+      this.networkCommand_(
+          'setExtraHTTPHeaders',
+          { headers: additionalHeaders }
+      ).then(changePageTriggerFn);
 
       return this.pageLoadDonePromise_.promise;
 
     }.bind(self);
 
-    // adds a cookie to the header
-    var addCookie = function(m)
+    var changePage = function(step, cmd, descr)
     {
-      cookieHeaders.push({
-        path  : m[1],
-        value : m[2]
-      });
-
-      // for the next time a request is executed, use the current set of cookies
-      additionalHeaders['Cookie'] = self.stringifyCookieList_(cookieHeaders);
+      this.app_.schedule(
+          descr,
+          function() { return changePageResolver(cmd); }
+      );
 
       this.app_.schedule(
-          'Executing setCookie',
+          'Set timeout for collecting DevTools messages',
           function()
           {
-            return this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
+            if(!step.logData)
+            {
+              logger.debug("LogData is false, so return!");
+              return webdriver.promise.fulfilled(true);
+            }
+            else
+            {
+              return this.app_.timeout(
+                  activityTimeout,
+                  "Waiting (" + activityTimeout + " ms)"
+              );
+            }
+          }.bind(this)
+      ).then( // after timeout
+          function()
+          {
+            if(step.logData) { step.result = this.devToolsMessages_; }
+
+            logger.debug("Written results: " + step.result);
+            this.devToolsMessages_ = [];
+            this.pageLoadDonePromise_ = undefined;
           }.bind(this)
       );
     }.bind(self);
 
+    /**
+     * Parsing script here
+     */
     var m = line.match(/^navigate\s+(\S+)$/i);
     if(m)
     {
@@ -919,29 +976,7 @@ WebDriverServer.prototype.execScript_ = function(script)
             this.pageCommand_('navigate', { url: m[1] } );
           }.bind(self);
 
-      self.app_.schedule(
-          'Executing navigate',
-          function() { return changePageResolver(navigate); }.bind(self)
-      );
-
-      self.app_.schedule(
-          'Set timeout for collecting DevTools messages',
-          function()
-          {
-            logger.debug("Create timeout: " + activityTimeout + " ms")
-            return this.app_.timeout(
-                activityTimeout, "Waiting (" + activityTimeout + " ms)");
-          }.bind(self)
-      ).then(
-          function()
-          {
-            if(step.logData) { step.result = this.devToolsMessages_ };
-
-            logger.debug("Written results: " + step.result);
-            this.devToolsMessages_ = [];
-            this.pageLoadDonePromise_ = undefined;
-          }.bind(self)
-      );
+      changePage(step, navigate, 'Executing navigate');
 
       return;
     }
@@ -961,74 +996,51 @@ WebDriverServer.prototype.execScript_ = function(script)
       return;
     }
 
-    // match: setCookie	http://www.aol.com	TestData=Test;
+    // match: "setCookie	http://www.aol.com	TestData=Test;"
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
     if(m)
     {
-      addCookie(m);
+      Cookies.addCookie(m);
       return;
     }
 
-    // match: setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT
+    // match: "setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT"
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)\s+expires=(.*)$/i);
     if(m)
     {
       // only accept cookies that are not expired
-      if(new Date(m[3]) > new Date()) { addCookie(m); }
+      if(new Date(m[3]) > new Date()) { Cookies.addCookie(m); }
       return;
     }
 
-    // match: setHeader header: value
+    // match: "setHeader header: value"
     m = line.match(/^setHeader\s+(\S+):\s(.*)$/i);
     if(m)
     {
       additionalHeaders[m[1]] = m[2];
-
-      self.app_.schedule(
-          'Executing setHeader',
-          function()
-          {
-            return this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-          }.bind(self)
-      );
-      return;
     }
 
+    // match: "addHeader header: value"
     m = line.match(/^addHeader\s+(\S+):\s(.*)$/i);
     if(m)
     {
-      if(! additionalHeaders[m[1]])
-      {
-        additionalHeaders[m[1]] = m[2];
-
-        self.app_.schedule(
-            'Executing addHeader',
-            function()
-            {
-              return this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-            }.bind(self)
-        );
-      }
-
+      if(! additionalHeaders[m[1]]) { additionalHeaders[m[1]] = m[2]; }
       return;
     }
 
+    // match: "resetHeaders"
     m = line.match(/^resetHeaders$/i);
     if(m)
     {
       additionalHeaders = {};
 
-      self.app_.schedule(
-          'Executing resetHeaders',
-          function()
-          {
-            return this.networkCommand_( 'setExtraHTTPHeaders', { headers: additionalHeaders } );
-          }.bind(self)
-      );
+      // also delete cookies
+      Cookies.cs = [];
 
       return;
     }
 
+    // match: "logData 1" or "logData 0"
     m = line.match(/^logData\s+(\d)$/i);
     if(m)
     {
@@ -1036,12 +1048,14 @@ WebDriverServer.prototype.execScript_ = function(script)
       return;
     }
 
+    // match: "setActivityTimeout 5000"
     m = line.match(/^setActivityTimeout\s+(\d+)/i);
     {
       activityTimeout = m[1];
       return;
     }
 
+    // match: "exec myscripthere"
     m = line.match(/^exec\s+(.*)$/i);
     if(m)
     {
@@ -1056,51 +1070,17 @@ WebDriverServer.prototype.execScript_ = function(script)
       return;
     }
 
+    // match: "execAndWait myscripthere"
     m = line.match(/^execAndWait\s+(.*)$/i);
     if(m)
     {
-      var execAndWait = function()
-      {
-        this.runtimeCommand_( 'evaluate', { expression : m[1] } );
-      }.bind(self);
-
-      var step = currentStep;
-
-      self.app_.schedule(
-          'Executing execAndWait',
-          function()
+      var step = currentStep,
+          execAndWait = function()
           {
-            return changePageResolver(execAndWait);
-          }.bind(self)
-      );
+            this.runtimeCommand_( 'evaluate', { expression : m[1] } );
+          }.bind(self);
 
-      self.app_.schedule(
-          'Set timeout for collecting DevTools messages',
-          function()
-          {
-            if(!step.logData)
-            {
-              logger.debug("LogData is false, so return!");
-              return webdriver.promise.fulfilled(true);
-            }
-            else
-            {
-              return this.app_.timeout(
-                  activityTimeout,
-                  "Waiting (" + activityTimeout + " ms)"
-              );
-            }
-          }.bind(self)
-      ).then(
-          function()
-          {
-            if(step.logData) { step.result = this.devToolsMessages_; }
-
-            logger.debug("Written results: " + step.result);
-            this.devToolsMessages_ = [];
-            this.pageLoadDonePromise_ = undefined;
-          }.bind(self)
-      );
+      changePage(step, execAndWait, 'Executing execAndWait');
 
       return;
     }
@@ -1108,20 +1088,6 @@ WebDriverServer.prototype.execScript_ = function(script)
     logger.warn("Unsupported script command (will be ignored): " + line);
   });
 };
-
-WebDriverServer.prototype.stringifyCookieList_= function(cookieList)
-{
-  logger.debug("CookieList: " + JSON.stringify(cookieList));
-
-  var cookieString = "";
-
-  for(var i = 0; i < cookieList.length; i++)
-  {
-    cookieString += cookieList[i].value + " ";
-  }
-
-  return cookieString.trim();
-}
 
 /**
  * A cookie will be send as a header if:
