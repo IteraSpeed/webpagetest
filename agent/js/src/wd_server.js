@@ -574,7 +574,6 @@ WebDriverServer.prototype.runTest_ = function(browserCaps) {
         this.task_.script);
     this.runScriptedTask_(browserCaps);
   } else {
-    logger.debug("Running page load");
     this.runPageLoad_(browserCaps);
   }
 };
