@@ -566,7 +566,12 @@ WebDriverServer.prototype.runTest_ = function(browserCaps) {
   'use strict';
   if (this.task_.script) {
     //this.runSandboxedSession_(browserCaps);
-    logger.debug("Running skripted test:\n%s", this.task_.script);
+    logger.debug(
+        "Running scripted test:" +
+        "\n---------------------------" +
+        "\n%s" +
+        "\n---------------------------",
+        this.task_.script);
     this.runScriptedTask_(browserCaps);
   } else {
     logger.debug("Running page load");
@@ -816,12 +821,6 @@ WebDriverServer.prototype.runPageLoad_ = function(browserCaps) {
           this.timeout_ - (exports.WAIT_AFTER_ONLOAD_MS + SUBMIT_TIMEOUT_MS_));
     }
     this.onTestStarted_();
-
-    if(this.task_.cookies)
-    {
-        this.setCookieHeader_(this.task_.url, this.task_.cookies);
-    }
-
     this.pageCommand_('navigate', {url: this.task_.url});
     return this.pageLoadDonePromise_.promise;
   }.bind(this));
@@ -829,30 +828,25 @@ WebDriverServer.prototype.runPageLoad_ = function(browserCaps) {
 };
 
 /**
- * Executes a wpt script.
+ * Executes a wpt script by scheduling each step that needs to communicate
+ * with the browser (i.e. navigate, exec, and execAndWait)
  *
- * The script will be executed by chaining promises. Each script command,
- * that needs to communicate with the browser, will create a fulfill listener
- * on the promise that has been created by the previous script command.
- *
- * @param browserCaps
+ * @param {Object} browserCaps browser capabilities used to build the driver.
  * @private
  */
-WebDriverServer.prototype.runScriptedTask_ = function(browserCaps)
-{
+WebDriverServer.prototype.runScriptedTask_ = function(browserCaps) {
   'use strict';
+
   this.sandboxApp_ = this.app_;
   if (!this.devTools_) {
     this.startChrome_(browserCaps);
   }
   this.clearPageAndStartVideoDevTools_();
   this.scheduleStartPacketCaptureIfRequested_();
-
   this.onTestStarted_();
 
   // start script execution
   this.execScript_(this.task_.script);
-
 };
 
 /**
@@ -864,8 +858,7 @@ WebDriverServer.prototype.runScriptedTask_ = function(browserCaps)
  * @param script
  * @private
  */
-WebDriverServer.prototype.execScript_ = function(script)
-{
+WebDriverServer.prototype.execScript_ = function(script) {
   'use strict';
 
   var currentStep = null,     // reference pointer to the current step
@@ -873,21 +866,20 @@ WebDriverServer.prototype.execScript_ = function(script)
       activityTimeout = 2000, // timeout for result collection
       self = this;            // self reference
 
+  // simple collection of cookies
   var Cookies = {
     cs : [],
-    addCookie : function(pathValueArray)
-    {
+    addCookie : function(pathValueArray) {
       this.cs.push({
+        // TODO: find a way to evaluate the cookie path
         path  : pathValueArray[1],
         value : pathValueArray[2]
       });
     },
-    toString : function()
-    {
+    toString : function() {
       var cookieString = "";
 
-      for(var i = 0; i < this.cs.length; i++)
-      {
+      for(var i = 0; i < this.cs.length; i++) {
         cookieString += this.cs[i].value + " ";
       }
 
@@ -895,26 +887,21 @@ WebDriverServer.prototype.execScript_ = function(script)
     }
   };
 
-  script.split('\n').forEach(function(line, lineNumber)
-  {
+  script.split('\n').forEach(function(line, lineNumber) {
     line = line.trim();
 
     // Executes an action that eventually changes the page of the browser.
     // The app schedule will resume execution, if the Page.onLoad Event
     // have been fired (for this, we set the pageLoadDonePromise_)
-    var changePageResolver = function(changePageTriggerFn)
-    {
+    var changePageResolver = function(changePageTriggerFn) {
       // wait for page.onLoad
       this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
 
       // set current list of cookies as header
       var cookieStr = Cookies.toString();
-      if(cookieStr.length > 0)
-      {
+      if(cookieStr.length > 0) {
         additionalHeaders['Cookie'] = cookieStr;
-      }
-      else
-      {
+      } else {
         delete additionalHeaders['Cookie'];
       }
 
@@ -925,13 +912,11 @@ WebDriverServer.prototype.execScript_ = function(script)
       ).then(changePageTriggerFn);
 
       return this.pageLoadDonePromise_.promise;
-
     }.bind(self);
 
-    // Create a chain of schedules to change a page and log the
+    // Creates a chain of schedules to change a page and log the
     // resulting devTools messages.
-    var changePage = function(step, cmd, descr)
-    {
+    var changePage = function(step, cmd, descr) {
       this.app_.schedule(
           descr,
           function() { return changePageResolver(cmd); }
@@ -939,15 +924,11 @@ WebDriverServer.prototype.execScript_ = function(script)
 
       this.app_.schedule(
           'Set timeout for collecting DevTools messages',
-          function()
-          {
-            if(!step.logData)
-            {
+          function() {
+            if(!step.logData) {
               logger.debug("LogData is false, so return!");
               return webdriver.promise.fulfilled(true);
-            }
-            else
-            {
+            } else {
               return this.app_.timeout(
                   activityTimeout,
                   "Waiting (" + activityTimeout + " ms)"
@@ -955,8 +936,7 @@ WebDriverServer.prototype.execScript_ = function(script)
             }
           }.bind(this)
       ).then( // after timeout
-          function()
-          {
+          function() {
             if(step.logData) { step.result = this.devToolsMessages_; }
 
             logger.debug("Written results: " + step.result);
@@ -970,22 +950,18 @@ WebDriverServer.prototype.execScript_ = function(script)
      * Parsing script here
      */
     var m = line.match(/^navigate\s+(\S+)$/i);
-    if(m)
-    {
+    if(m) {
       var step = currentStep,
-          navigate = function()
-          {
+          navigate = function() {
             this.pageCommand_('navigate', { url: m[1] } );
           }.bind(self);
 
       changePage(step, navigate, 'Executing navigate');
-
       return;
     }
 
     m = line.match(/^setEventName\s+(\S+)$/i);
-    if(m)
-    {
+    if(m) {
       var newStep = {
         eventName : m[1],
         logData   : true,
@@ -994,22 +970,19 @@ WebDriverServer.prototype.execScript_ = function(script)
 
       self.steps.push(newStep);
       currentStep = newStep;
-
       return;
     }
 
     // match: "setCookie	http://www.aol.com	TestData=Test;"
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
-    if(m)
-    {
+    if(m) {
       Cookies.addCookie(m);
       return;
     }
 
     // match: "setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT"
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)\s+expires=(.*)$/i);
-    if(m)
-    {
+    if(m) {
       // only accept cookies that are not expired
       if(new Date(m[3]) > new Date()) { Cookies.addCookie(m); }
       return;
@@ -1017,73 +990,60 @@ WebDriverServer.prototype.execScript_ = function(script)
 
     // match: "setHeader header: value"
     m = line.match(/^setHeader\s+(\S+):\s(.*)$/i);
-    if(m)
-    {
+    if(m) {
       additionalHeaders[m[1]] = m[2];
     }
 
     // match: "addHeader header: value"
     m = line.match(/^addHeader\s+(\S+):\s(.*)$/i);
-    if(m)
-    {
+    if(m) {
       if(! additionalHeaders[m[1]]) { additionalHeaders[m[1]] = m[2]; }
       return;
     }
 
     // match: "resetHeaders"
     m = line.match(/^resetHeaders$/i);
-    if(m)
-    {
+    if(m) {
       additionalHeaders = {};
-
-      // also delete cookies
-      Cookies.cs = [];
-
+      Cookies.cs = []; // also delete cookies
       return;
     }
 
     // match: "logData 1" or "logData 0"
     m = line.match(/^logData\s+(\d)$/i);
-    if(m)
-    {
+    if(m) {
       currentStep.logData = !!m[1];
       return;
     }
 
     // match: "setActivityTimeout 5000"
     m = line.match(/^setActivityTimeout\s+(\d+)/i);
-    {
+    if(m) {
       activityTimeout = m[1];
       return;
     }
 
     // match: "exec myscripthere"
     m = line.match(/^exec\s+(.*)$/i);
-    if(m)
-    {
+    if(m) {
       self.app_.schedule(
           'Executing exec',
-          function()
-          {
+          function() {
             return this.runtimeCommand_( 'evaluate', { expression : m[1] } );
           }.bind(self)
       );
-
       return;
     }
 
     // match: "execAndWait myscripthere"
     m = line.match(/^execAndWait\s+(.*)$/i);
-    if(m)
-    {
+    if(m) {
       var step = currentStep,
-          execAndWait = function()
-          {
+          execAndWait = function() {
             this.runtimeCommand_( 'evaluate', { expression : m[1] } );
           }.bind(self);
 
       changePage(step, execAndWait, 'Executing execAndWait');
-
       return;
     }
 
