@@ -886,6 +886,8 @@ WebDriverServer.prototype.execScript_ = function(script) {
     }
   };
 
+  var stepCounter = 1;
+
   script.split('\n').forEach(function(line, lineNumber) {
     line = line.trim();
 
@@ -941,6 +943,8 @@ WebDriverServer.prototype.execScript_ = function(script) {
             logger.debug("Written results: " + step.result);
             this.devToolsMessages_ = [];
             this.pageLoadDonePromise_ = undefined;
+            this.takeScreenshot_(step.stepCount + '_screen', 'Step ' + step.stepCount + " screenshot")
+
           }.bind(this)
       );
     }.bind(self);
@@ -963,9 +967,12 @@ WebDriverServer.prototype.execScript_ = function(script) {
     if(m) {
       var newStep = {
         eventName : m[1],
+        stepCount : stepCounter,
         logData   : true,
         result    : null
       };
+
+      stepCounter++;
 
       self.steps.push(newStep);
       currentStep = newStep;
@@ -1315,7 +1322,8 @@ WebDriverServer.prototype.done_ = function(e) {
   if (this.driver_) {
     this.scheduleGetWdDevToolsLog_();
   }
-  this.takeScreenshot_('screen', (e ? 'run error' : 'end of run'));
+  // Don't take screenshot here, because we make screenshots for every step now
+  //this.takeScreenshot_('screen', (e ? 'run error' : 'end of run'));
   if (videoFile) {
     this.browser_.scheduleStopVideoRecording();
     process_utils.scheduleFunction(this.app_, 'videoFile exists?',
