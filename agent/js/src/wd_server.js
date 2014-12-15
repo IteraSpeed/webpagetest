@@ -170,6 +170,8 @@ WebDriverServer.prototype.init = function(args) {
   this.timeout_ = args.timeout;
   this.videoFile_ = undefined;
   this.runTempDir_ = args.runTempDir || '';
+  this.currentStep = null;     // reference pointer to the current step
+  this.frameNavigatedScreenshot = true; // take a screenshot when frame navigated message has been received
 
   // Step for multistep measurements
   this.steps = [];
@@ -300,7 +302,16 @@ WebDriverServer.prototype.onDevToolsMessage_ = function(message) {
       if (this.isRecordingDevTools_) {
         this.onPageLoad_();
       }
-    } else if ('Inspector.detached' === message.method) {
+    } else if('Page.domContentEventFired' === message.method) {
+      this.takeScreenshot_(
+          this.currentStep.stepCount + '_screen_dom',
+          'Step ' + this.currentStep.stepCount + " DOM screenshot");
+    }else if('Page.frameNavigated' === message.method && this.frameNavigatedScreenshot){
+      this.frameNavigatedScreenshot = false;
+      this.takeScreenshot_(
+          this.currentStep.stepCount + '_screen_render',
+          'Step ' + this.currentStep.stepCount + " " + message.params.frame.url + " Start Render screenshot");
+    }else if ('Inspector.detached' === message.method) {
       if (this.pageLoadDonePromise_ && this.pageLoadDonePromise_.isPending()) {
         // This message typically means that the browser has crashed.
         // Instead of waiting for the timeout, we'll give the browser a couple
@@ -860,8 +871,7 @@ WebDriverServer.prototype.runScriptedTask_ = function(browserCaps) {
 WebDriverServer.prototype.execScript_ = function(script) {
   'use strict';
 
-  var currentStep = null,     // reference pointer to the current step
-      additionalHeaders = {}, // map of headers to append to a request
+  var additionalHeaders = {}, // map of headers to append to a request
       activityTimeout = 2000, // timeout for result collection
       self = this;            // self reference
 
@@ -920,13 +930,15 @@ WebDriverServer.prototype.execScript_ = function(script) {
     var changePage = function(step, cmd, descr) {
       this.app_.schedule(
           descr,
-          function() { return changePageResolver(cmd); }
+          function() {
+            this.frameNavigatedScreenshot = true; // capture screenshot of screen render
+            return changePageResolver(cmd);}.bind(this)
       );
 
       this.app_.schedule(
           'Set timeout for collecting DevTools messages',
           function() {
-            if(!step.logData) {
+            if(!this.currentStep.logData) {
               logger.debug("LogData is false, so return!");
               return webdriver.promise.fulfilled(true);
             } else {
@@ -938,12 +950,12 @@ WebDriverServer.prototype.execScript_ = function(script) {
           }.bind(this)
       ).then( // after timeout
           function() {
-            if(step.logData) { step.result = this.devToolsMessages_; }
+            if(this.currentStep.logData) { this.currentStep.result = this.devToolsMessages_; }
 
-            logger.debug("Written results: " + step.result);
+            logger.debug("Written results: " + this.currentStep.result);
             this.devToolsMessages_ = [];
             this.pageLoadDonePromise_ = undefined;
-            this.takeScreenshot_(step.stepCount + '_screen', 'Step ' + step.stepCount + " screenshot")
+            this.takeScreenshot_(this.currentStep.stepCount + '_screen', 'Step ' + this.currentStep.stepCount + " screenshot")
 
           }.bind(this)
       );
@@ -954,7 +966,7 @@ WebDriverServer.prototype.execScript_ = function(script) {
      */
     var m = line.match(/^navigate\s+(\S+)$/i);
     if(m) {
-      var step = currentStep,
+      var step = self.currentStep,
           navigate = function() {
             this.pageCommand_('navigate', { url: m[1] } );
           }.bind(self);
@@ -965,17 +977,24 @@ WebDriverServer.prototype.execScript_ = function(script) {
 
     m = line.match(/^setEventName\s+(\S+)$/i);
     if(m) {
-      var newStep = {
-        eventName : m[1],
-        stepCount : stepCounter,
-        logData   : true,
-        result    : null
-      };
 
-      stepCounter++;
+      self.app_.schedule('creating new step', function()
+      {
+        var newStep = {
+          eventName : m[1],
+          stepCount : stepCounter,
+          logData   : true,
+          result    : null
+        };
 
-      self.steps.push(newStep);
-      currentStep = newStep;
+        logger.debug("Created new step: " + JSON.stringify(newStep));
+
+        stepCounter++;
+
+        this.steps.push(newStep);
+        this.currentStep = newStep;
+      }.bind(self));
+
       return;
     }
 
@@ -1018,7 +1037,7 @@ WebDriverServer.prototype.execScript_ = function(script) {
     // match: "logData 1" or "logData 0"
     m = line.match(/^logData\s+(\d)$/i);
     if(m) {
-      currentStep.logData = !!m[1];
+      self.currentStep.logData = !!m[1];
       return;
     }
 
@@ -1044,7 +1063,7 @@ WebDriverServer.prototype.execScript_ = function(script) {
     // match: "execAndWait myscripthere"
     m = line.match(/^execAndWait\s+(.*)$/i);
     if(m) {
-      var step = currentStep,
+      var step = self.currentStep,
           execAndWait = function() {
             this.runtimeCommand_( 'evaluate', { expression : m[1] } );
           }.bind(self);
