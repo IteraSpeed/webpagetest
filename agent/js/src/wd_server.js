@@ -303,14 +303,23 @@ WebDriverServer.prototype.onDevToolsMessage_ = function(message) {
         this.onPageLoad_();
       }
     } else if('Page.domContentEventFired' === message.method) {
-      this.takeScreenshot_(
-          this.currentStep.stepCount + '_screen_dom',
-          'Step ' + this.currentStep.stepCount + " DOM screenshot");
-    }else if('Page.frameNavigated' === message.method && this.frameNavigatedScreenshot){
+
+        if(this.currentStep) {
+          this.takeScreenshot_(
+              this.currentStep.stepCount + '_screen_dom',
+              'Step ' + this.currentStep.stepCount + " DOM screenshot");
+        }
+
+    }else if('Page.frameNavigated' === message.method && this.frameNavigatedScreenshot) {
+
       this.frameNavigatedScreenshot = false;
-      this.takeScreenshot_(
-          this.currentStep.stepCount + '_screen_render',
-          'Step ' + this.currentStep.stepCount + " " + message.params.frame.url + " Start Render screenshot");
+
+      if(this.currentStep) {
+        this.takeScreenshot_(
+            this.currentStep.stepCount + '_screen_render',
+            'Step ' + this.currentStep.stepCount + " " + message.params.frame.url + " Start Render screenshot");
+      }
+
     }else if ('Inspector.detached' === message.method) {
       if (this.pageLoadDonePromise_ && this.pageLoadDonePromise_.isPending()) {
         // This message typically means that the browser has crashed.
@@ -875,27 +884,6 @@ WebDriverServer.prototype.execScript_ = function(script) {
       activityTimeout = 2000, // timeout for result collection
       self = this;            // self reference
 
-  // simple collection of cookies
-  var Cookies = {
-    cs : [],
-    addCookie : function(pathValueArray) {
-      this.cs.push({
-        // TODO: find a way to evaluate the cookie path
-        path  : pathValueArray[1],
-        value : pathValueArray[2]
-      });
-    },
-    toString : function() {
-      var cookieString = "";
-
-      for(var i = 0; i < this.cs.length; i++) {
-        cookieString += this.cs[i].value + " ";
-      }
-
-      return cookieString.trim();
-    }
-  };
-
   var stepCounter = 1;
 
   script.split('\n').forEach(function(line, lineNumber) {
@@ -907,32 +895,19 @@ WebDriverServer.prototype.execScript_ = function(script) {
     var changePageResolver = function(changePageTriggerFn) {
       // wait for page.onLoad
       this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
-
-      // set current list of cookies as header
-      var cookieStr = Cookies.toString();
-      if(cookieStr.length > 0) {
-        additionalHeaders['Cookie'] = cookieStr;
-      } else {
-        delete additionalHeaders['Cookie'];
-      }
-
-      // set headers for next request
-      this.networkCommand_(
-          'setExtraHTTPHeaders',
-          { headers: additionalHeaders }
-      ).then(changePageTriggerFn);
-
+      changePageTriggerFn();
       return this.pageLoadDonePromise_.promise;
     }.bind(self);
 
     // Creates a chain of schedules to change a page and log the
     // resulting devTools messages.
-    var changePage = function(step, cmd, descr) {
+    var changePage = function(cmd, descr) {
       this.app_.schedule(
           descr,
           function() {
             this.frameNavigatedScreenshot = true; // capture screenshot of screen render
-            return changePageResolver(cmd);}.bind(this)
+            return changePageResolver(cmd);
+          }.bind(this)
       );
 
       this.app_.schedule(
@@ -961,17 +936,75 @@ WebDriverServer.prototype.execScript_ = function(script) {
       );
     }.bind(self);
 
-    /**
+    // setting cookie by navigating to cookie domain and executing javascript,
+    // which sets the cookie
+    var cookieSetter = function(m)
+    {
+      var beginsWith = function (str1, str2)  {
+        return str1.slice(0, str2.length) === str2;
+      };
+
+      var isPath = beginsWith(m[1], "/"),
+          cookieStr = m[2];
+
+      if(m[3]) { cookieStr += " expires=" + m[3]; }
+      cookieStr += "; ";
+
+
+      if(isPath) { cookieStr += "path=" + m[1]; }
+      else { cookieStr += "domain=" + m[1]; }
+
+      // 1 Step: navigate to domain
+      if(!isPath) {
+        var domain = m[1], isForSubDomain = beginsWith(m[1],".");
+
+        if(isForSubDomain) { domain = m[1].substr(1, m[1].length); }
+        if(!beginsWith(domain, 'http')) { domain = 'http://' + domain;  }
+
+        self.app_.schedule('navigate to cookie domain to set cookie', function() {
+
+          this.pageLoadDonePromise_ = new webdriver.promise.Deferred();
+          if (this.timeout_) {
+            this.timeoutTimer_ = global.setTimeout(
+                this.onPageLoad_.bind(this, new Error('Page load timeout')),
+                this.timeout_ - (exports.WAIT_AFTER_ONLOAD_MS + SUBMIT_TIMEOUT_MS_));
+          }
+
+          this.pageCommand_( 'navigate', { url: domain });
+          return this.pageLoadDonePromise_.promise;
+        }.bind(self));
+
+        // 2 Step: Set cookie
+        self.app_.schedule('Setting cookie', function() {
+          return this.runtimeCommand_( 'evaluate', { expression : "document.cookie= '" + cookieStr + "'" } );
+        }.bind(self));
+
+        // 3 Step: clear cache
+        self.app_.schedule('Clearing cache', function() {
+          return this.networkCommand_('clearBrowserCache');
+        }.bind(self));
+      }
+      else {
+        self.app_.schedule(
+            'Setting cookie',
+            function() {
+              return this.runtimeCommand_( 'evaluate', { expression : "document.cookie= '" + cookieStr + "'" } );
+            }.bind(self)
+        );
+      }
+    };
+
+
+    /**********************************
      * Parsing script here
-     */
+     *********************************/
     var m = line.match(/^navigate\s+(\S+)$/i);
     if(m) {
-      var step = self.currentStep,
-          navigate = function() {
+      var navigate = function() {
             this.pageCommand_('navigate', { url: m[1] } );
           }.bind(self);
 
-      changePage(step, navigate, 'Executing navigate');
+      changePage(navigate, 'Executing navigate');
       return;
     }
 
@@ -998,46 +1031,78 @@ WebDriverServer.prototype.execScript_ = function(script) {
       return;
     }
 
-    // match: "setCookie	http://www.aol.com	TestData=Test;"
-    m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
-    if(m) {
-      Cookies.addCookie(m);
-      return;
-    }
-
     // match: "setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT"
     m = line.match(/^setCookie\s+(\S+)\s+(\S+)\s+expires=(.*)$/i);
     if(m) {
-      // only accept cookies that are not expired
-      if(new Date(m[3]) > new Date()) { Cookies.addCookie(m); }
+
+      cookieSetter(m);
+      return;
+    }
+
+    // match: "setCookie	http://www.aol.com	TestData=Test;"
+    m = line.match(/^setCookie\s+(\S+)\s+(\S+)$/i);
+    if(m) {
+
+      cookieSetter(m);
       return;
     }
 
     // match: "setHeader header: value"
     m = line.match(/^setHeader\s+(\S+):\s(.*)$/i);
     if(m) {
+
       additionalHeaders[m[1]] = m[2];
+
+      self.app_.schedule(
+          'Setting header',
+          function() {
+            return this.networkCommand_(
+                'setExtraHTTPHeaders',
+                { headers: additionalHeaders });
+          }.bind(self)
+      );
     }
 
     // match: "addHeader header: value"
     m = line.match(/^addHeader\s+(\S+):\s(.*)$/i);
     if(m) {
-      if(! additionalHeaders[m[1]]) { additionalHeaders[m[1]] = m[2]; }
+      if(! additionalHeaders[m[1]]) {
+        additionalHeaders[m[1]] = m[2];
+
+        self.app_.schedule(
+            'Adding header',
+            function() {
+              return this.networkCommand_(
+                  'setExtraHTTPHeaders',
+                  { headers: additionalHeaders });
+            }.bind(self)
+        );
+      }
       return;
     }
 
     // match: "resetHeaders"
     m = line.match(/^resetHeaders$/i);
     if(m) {
-      additionalHeaders = {};
-      Cookies.cs = []; // also delete cookies
+
+      self.app_.schedule(
+          'Reseting headers',
+          function() { additionalHeaders = {}; }
+      );
       return;
     }
 
     // match: "logData 1" or "logData 0"
     m = line.match(/^logData\s+(\d)$/i);
     if(m) {
-      self.currentStep.logData = !!m[1];
+
+      self.app_.schedule('setting log state of current step', function()
+      {
+        this.currentStep.logData = !!m[1];
+        logger.debug("Current step does log data: " + this.currentStep.logData);
+      }.bind(self));
+
+
       return;
     }
 
@@ -1063,60 +1128,17 @@ WebDriverServer.prototype.execScript_ = function(script) {
     // match: "execAndWait myscripthere"
     m = line.match(/^execAndWait\s+(.*)$/i);
     if(m) {
-      var step = self.currentStep,
-          execAndWait = function() {
+      var execAndWait = function() {
             this.runtimeCommand_( 'evaluate', { expression : m[1] } );
           }.bind(self);
 
-      changePage(step, execAndWait, 'Executing execAndWait');
+      changePage(execAndWait, 'Executing execAndWait');
       return;
     }
 
     logger.warn("Unsupported script command (will be ignored): " + line);
   });
 };
-
-/**
- * A cookie will be send as a header if:
- * a) the cookiePath is a path (for ex. /somewhere) and the url contains this path
- * b) the cookiePath is a domain and the url this domain (or a subdomain)
- *
- * @param urlObj created by node.js url
- * @param cookiePath path given in the setCookie script command
- * @returns {boolean}
- * @private
- */
-/*WebDriverServer.prototype.includeCookie_ = function(urlObj, cookiePath)
-{
-    if(cookiePath.charAt(0) == "/") // cookiePath is path
-    {
-        return urlObj.pathname.indexOf(cookiePath) > -1;
-    }
-
-    var domain = cookiePath;
-    if(cookiePath.charAt(0) == ".")
-    {
-        domain = cookiePath.substring(1, cookiePath.length);
-    }
-
-    return urlObj.hostname.indexOf(domain) > -1;
-}
-
-WebDriverServer.prototype.setCookieHeader_ = function(taskUrl, cookies)
-{
-    var cookieString = "";
-
-    for(var i = 0; i < cookies.length; i++)
-    {
-        if(this.includeCookie_(url.parse(taskUrl), cookies[i].path))
-        {
-          cookieString += cookies[i].value + " ";
-        }
-    }
-
-    logger.debug("Setting cookie header: " + cookieString);
-    this.networkCommand_('setExtraHTTPHeaders', { headers : { Cookie : cookieString.trim() }});
-}*/
 
 /**
  * Runs the user script in a sandboxed environment.
