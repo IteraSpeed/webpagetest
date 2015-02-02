@@ -584,7 +584,7 @@ WebDriverServer.prototype.onAfterDriverError = function(
  */
 WebDriverServer.prototype.runTest_ = function(browserCaps) {
   'use strict';
-  if (this.task_.script) {
+  if (this.task_.script) { //if script is available
     //this.runSandboxedSession_(browserCaps);
     logger.debug(
         "Running scripted test:" +
@@ -593,8 +593,21 @@ WebDriverServer.prototype.runTest_ = function(browserCaps) {
         "\n---------------------------",
         this.task_.script);
     this.runScriptedTask_(browserCaps);
-  } else {
-    this.runPageLoad_(browserCaps);
+  } else { //if url was given by form
+
+    //if no script was given but an url by form, change it to a default script and run this instead of only url
+    //For default EventName are no "/" (Slashes) allowed, because of distorting path on server
+    var defaultScript = "setEventName\tunnamed-event" +
+            "\nnavigate\t" + this.task_.url;
+    this.task_.script = defaultScript;
+    logger.debug(
+        "Running non-scripted test, but starting by defaultScript" +
+        "\n---------------------------" +
+        "\n%s" +
+        "\n---------------------------",
+        this.task_.script);
+    this.runScriptedTask_(browserCaps);
+    //this.runPageLoad_(browserCaps);
   }
 };
 
