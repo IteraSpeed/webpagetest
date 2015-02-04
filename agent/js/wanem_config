@@ -132,60 +132,69 @@ EOF
 # \param plr (packet loss rate) '' or 0.0 <= value <= 1.0.
 # \return 0 if success, else non-zero
 update_WANemRPi() {
-  local -r addr=$([[ "$1" != any ]] && echo "$2")
-  local -r bw_down=$([[ ! "$2" =~ ^(unlimited|0*)$ ]] && echo "$2")
-  local -r bw_up=$([[ ! "$3" =~ ^(unlimited|0*)$ ]] && echo "$3")
-  local -r delay_down=$([[ ! "$4" =~ ^0*$ ]] && echo "$4")
-  local -r delay_up=$([[ ! "$5" =~ ^0*$ ]] && echo "$5")
-  local -r plr_down=$([[ ! "$6" =~ ^0(\.0+)?$ ]] && echo "$6")
-  local -r plr_up=$([[ ! "$7" =~ ^0(\.0+)?$ ]] && echo "$7")
+  local -r addr=$([[ "$1" != any ]] && echo "$1")
+  bw_down=$([[ ! "$2" =~ ^(unlimited|0*)$ ]] && echo "$2")
+  bw_up=$([[ ! "$3" =~ ^(unlimited|0*)$ ]] && echo "$3")
+  delay_down=$( echo "$4")
+  delay_up=$( echo "$5")
+  plr_down=$( echo "$6")
+  plr_up=$( echo "$7")
 
   # Address must be 'any', IP, or a MAC
   local -r proto=$([[ -z "$addr" || "$addr" == any ]] && echo ip ||
       [[ "$addr" =~ ^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$ ]] && echo mac ||
       [[ "$addr" =~ ^[0-9a-fA-F\.:\$\/]+$ ]] && echo ip)
   [[ -n "$proto" ]] || { \
-      echo "Invalid address '$addr'" >/dev/stderr; return 1; }
+      echo "Invalid address '$addr'" >&2; return 1; }
 
   # Bandwidth must be '', 'unlimited', or int >= 0
   [[ "$bw_down" =~ ^(unlimited|[0-9]+)?$ ]] || \
-      { echo "Invalid bw '$bw_down'" >/dev/stderr; return 1; }
+      { echo "Invalid bw '$bw_down'" >&2; return 1; }
   [[ "$bw_up" =~ ^(unlimited|[0-9]+)?$ ]] || \
-      { echo "Invalid bw '$bw_up'" >/dev/stderr; return 1; }
+      { echo "Invalid bw '$bw_up'" >&2; return 1; }
 
   # Divide delay equally  (must be '' or an int >= 0)
   [[ "$delay_down" =~ ^[0-9]*$ ]] || \
-      { echo "Invalid delay '$delay_down'" >/dev/stderr; return 1; }
+      { echo "Invalid delay '$delay_down'" >&2; return 1; }
   [[ "$delay_up" =~ ^[0-9]*$ ]] || \
-      { echo "Invalid delay '$delay_up'" >/dev/stderr; return 1; }
+      { echo "Invalid delay '$delay_up'" >&2; return 1; }
 
   # Incur all packet-loss-rate on the output  (must be '' or [0..1])
-  [[ "$plr_down" =~ ^(0|0\.[0-9]+|1\.0+|1)?$ ]] || \
-      { echo "Invalid plr '$plr_down'" >/dev/stderr; return 1; }
-  [[ "$plr_up" =~ ^(0|0\.[0-9]+|1\.0+|1)?$ ]] || \
-      { echo "Invalid plr '$plr_up'" >/dev/stderr; return 1; }
+  if [[ "$plr_down" =~ ^(0|1)?$ ]]; then
+      plr_down=$(echo "$plr_down.0")
+  fi
+  if [[ "$plr_up" =~ ^(0|1)?$ ]]; then
+      plr_up=$(echo "$plr_up.0")
+  fi
+  [[ "$plr_down" =~ ^(0\.[0-9]+|1\.0)?$ ]] || \
+      { echo "Invalid plr '$plr_down'" >&2; return 1; }
+  [[ "$plr_up" =~ ^(0\.[0-9]+|1\.0)?$ ]] || \
+      { echo "Invalid plr '$plr_up'" >&2; return 1; }
 
-  #TODO bw-values muessen noch durch 1000 dividiert werden
+  #alter bw-values for WANem compatibility
+  bw_down=$(echo $(($bw_down/1000)))
+  bw_up=$(echo $(($bw_up/1000)))
   # Send REST call to WANem-RPi
-  local http_url = "http://$addr:8080/set_shaping?bwdown=$bw_down&bwup=$bw_up&latencydown=$delay_down&latencyup=$delay_up&plrdown=$plr_down&plrup=$plr_up"
-  echo $http_url
-  local response_code = curl --write-out %{http_code} --silent --output /dev/null $http_url
+  local http_url=$(echo "http://$addr:8080/set_shaping?bwdown=$bw_down&bwup=$bw_up&latencydown=$delay_down&latencyup=$delay_up&plrdown=$plr_down&plrup=$plr_up")
+  echo $http_url >&1
+  sleep 5s
+  local response_code=$(curl --write-out %{http_code} --silent --output /dev/null $http_url)
   [[ "$response_code" == "200" ]] || \
-      { echo "HTTP request failed '$response_code'" >/dev/stderr; return 1; }
+      { echo "HTTP request failed '$response_code'" >&2; return 1; }
 
   return 0
 }
 
 main() {
   # Parse args
-  local command=
+  command=
   local addr=
-  local down_bw=99999
+  local down_bw=9999000
   local down_delay=0
-  local down_plr=0
-  local up_bw=99999
+  local down_plr="0.0"
+  local up_bw=9999000
   local up_delay=0
-  local up_plr=0
+  local up_plr="0.0"
   while [[ $# -gt 0 ]]; do
     local v="${2:-MISSING}"
     local shift_by=2
@@ -208,11 +217,7 @@ main() {
     shift $shift_by
   done
 
-  [[ -z "$command" || "$command" == set ]] || \
-      [[ -z "$down_bw" && -z "$down_delay" && -z "$down_plr" && -z "$up_bw" && -z "$up_delay" && -z "$up_plr" ]] ||
-      usage "Unexpected down/up options"
-
-  [[ "$command" == clear ]] && command=set
+  [[ "$command" == clear ]] && command=$(echo set)
 
   if [[ "$command" == set ]]; then
     update_WANemRPi "$addr" "$down_bw" "$up_bw" "$down_delay" "$up_delay" "$down_plr" "$up_plr" || return 1

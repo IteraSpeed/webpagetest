@@ -547,7 +547,13 @@ Agent.prototype.scheduleCleanup_ = function(isEndOfJob) {
 Agent.prototype.trafficShaper_ =
     function(command, opts) {  // jshint unused:false
   'use strict';
-  var cmd = this.flags_.trafficShaper || './ipfw_config';
+    if (this.flags_.trafficShaper){
+        var cmd = this.flags_.trafficShaper;
+        var timeout = 80000;
+    } else {
+        var cmd = './ipfw_config';
+        var timeout = null;
+    }
   var args = [];
   if (0 !== cmd.indexOf(',')) {
     // support 'proxy,--url,http://foo:8084,ipfw_config'
@@ -566,7 +572,7 @@ Agent.prototype.trafficShaper_ =
   if (!(opts && 'address' in opts) && this.flags_.deviceAddr) {
     args.push('--address', this.flags_.deviceAddr);
   }
-  return process_utils.scheduleExec(this.app_, cmd, args);
+  return process_utils.scheduleExec(this.app_, cmd, args,null,timeout);
 };
 
 /**
