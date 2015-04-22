@@ -249,7 +249,7 @@ WebDriverServer.prototype.connectDevTools_ = function() {
   if (1 === this.task_.timeline || 1 === this.task_['Capture Video']) {
     var timelineStackDepth = (this.task_.timelineStackDepth ?
         parseInt(this.task_.timelineStackDepth, 10) : 0);
-    this.timelineCommand_('start', {maxCallStackDepth: timelineStackDepth});
+    this.tracingCommand_('start', {maxCallStackDepth: timelineStackDepth});
   }
 };
 
@@ -656,9 +656,9 @@ WebDriverServer.prototype.networkCommand_ = function(method, params) {
  * @return {webdriver.promise.Promise} resolve({string} responseBody).
  * @private
  */
-WebDriverServer.prototype.timelineCommand_ = function(method, params) {
+WebDriverServer.prototype.tracingCommand_ = function(method, params) {
   'use strict';
-  var message = {method: 'Timeline.' + method};
+  var message = {method: 'Tracing.' + method};
   if (params) {
     message.params = params;
   }
