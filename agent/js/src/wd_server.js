@@ -26,6 +26,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
+var adb = require('adb');
 var browser_base = require('browser_base');
 var devtools = require('devtools');
 var fs = require('fs');
@@ -1007,7 +1008,6 @@ WebDriverServer.prototype.execScript_ = function(script) {
       }
     };
 
-
     /**********************************
      * Parsing script here
      *********************************/
@@ -1042,6 +1042,21 @@ WebDriverServer.prototype.execScript_ = function(script) {
       }.bind(self));
 
       return;
+    }
+
+    m = line.match(/^setOrientation\s+(\S+)$/i);
+    if(m) {
+        self.app_.schedule(
+            'Setting orientation',
+            function() {
+                if (m[1] !== "landscape" && m[1] !== "portrait") {
+                    logger.warn("Orientation " + m[1] + " unsupported! (Command will be ignored!)");
+                    return
+                }
+                this.browser_.setOrientation(m[1]);
+            }.bind(self)
+        );
+        return;
     }
 
     // match: "setCookie	http://www.aol.com	TestData=Test; expires=Sat,01-Jan-2000 00:00:00 GMT"

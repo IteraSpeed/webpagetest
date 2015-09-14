@@ -671,6 +671,16 @@ BrowserIos.prototype.scheduleStopVideoRecording = function() {
 };
 
 /**
+ * Sets orientation
+ *
+ * @param {string} orientation
+ */
+BrowserIos.prototype.setOrientation = function(orientation) {
+  'use strict';
+  logger.warn("setOrientation not supported under iOS!");
+};
+
+/**
  * Starts packet capture.
  *
  * #param {string} filename  local file where to copy the pcap result.

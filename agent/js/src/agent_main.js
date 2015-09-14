@@ -396,7 +396,7 @@ ScriptError.prototype = new Error();
 Agent.prototype.decodeUrlAndPacFromScript_ = function(script) {
   'use strict';
   // Assign nulls to appease 'possibly uninitialized' warnings.
-  var fromHost = "foo.com", toHost = "ignored.com", proxy = null, url = null;
+  var fromHost = "foo.com", toHost = "ignored.com", proxy = null, url = null, orientation = null;
   script.split('\n').forEach(function(line, lineNumber) {
     line = line.trim();
     if (!line || 0 === line.indexOf('//')) {
@@ -418,8 +418,8 @@ Agent.prototype.decodeUrlAndPacFromScript_ = function(script) {
     }
     m = line.match(/^navigate\s+(\S+)$/i);
     if (m && fromHost && !url) {
-      url = m[1];
-      return;
+        url = m[1];
+        return;
     }
     throw new ScriptError('WPT script contains unsupported line[' +
         lineNumber + ']: ' + line + '\n' +

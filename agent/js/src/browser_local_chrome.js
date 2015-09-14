@@ -170,3 +170,13 @@ BrowserLocalChrome.prototype.scheduleStopPacketCapture = function() {
   'use strict';
   throw new Error('Packet capture requested, but not implemented for Chrome');
 };
+
+/**
+ * Sets orientation
+ *
+ * @param {string} orientation
+ */
+BrowserLocalChrome.prototype.setOrientation = function(orientation) {
+  'use strict';
+  logger.warn("setOrientation not supported under BrowserLocalChrome!");
+};

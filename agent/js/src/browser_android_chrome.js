@@ -639,6 +639,20 @@ BrowserAndroidChrome.prototype.scheduleStopVideoRecording = function() {
 };
 
 /**
+ * Sets orientation
+ *
+ * @param {string} orientation
+ */
+BrowserAndroidChrome.prototype.setOrientation = function(orientation) {
+  'use strict';
+  if (orientation === "landscape") {
+    this.adb_.shell(["content", "update", "--uri", "content://settings/system" , "--bind", "name:s:user_rotation", "--bind", "value:i:1"]);
+  }else{
+    this.adb_.shell(["content", "update", "--uri", "content://settings/system" , "--bind", "name:s:user_rotation", "--bind", "value:i:0"]);
+  }
+};
+
+/**
  * Starts packet capture.
  *
  * @param {string} filename  local file where to copy the pcap result.
