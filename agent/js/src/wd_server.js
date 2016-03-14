@@ -1091,6 +1091,31 @@ WebDriverServer.prototype.execScript_ = function(script) {
       );
     }
 
+    // match: "sleep value"
+    m = line.match(/^sleep\s+(\d)$/i);
+    if(m) {
+
+      self.app_.schedule(
+          'Sleeping',
+          function() {
+            var wait = function(ms){
+               var start = new Date().getTime();
+               var end = start;
+               while(end < start + ms) {
+                 end = new Date().getTime();
+              }
+            }
+            var waitTimeInMs = parseInt(m[1]) * 1000;
+            logger.debug("waiting for " + waitTimeInMs + "ms");
+            wait(waitTimeInMs);
+            logger.debug("waited for " + waitTimeInMs + "ms");
+            return ;
+          }.bind(self)
+      );
+
+      return;
+    }
+
     // match: "addHeader header: value"
     m = line.match(/^addHeader\s+(\S+):\s(.*)$/i);
     if(m) {
