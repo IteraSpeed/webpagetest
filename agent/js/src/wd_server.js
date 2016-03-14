@@ -1126,7 +1126,9 @@ WebDriverServer.prototype.execScript_ = function(script) {
 
       self.app_.schedule('setting log state of current step', function()
       {
-        this.currentStep.logData = !!m[1];
+        // check if given String "1" or "0" equals to boolean TRUE or FALSE
+        // see http://stackoverflow.com/questions/7615214/in-javascript-why-is-0-equal-to-false-but-when-tested-by-if-it-is-not-fals
+        this.currentStep.logData = m[1]==true;
         logger.debug("Current step does log data: " + this.currentStep.logData);
       }.bind(self));
 
