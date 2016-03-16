@@ -939,6 +939,9 @@ WebDriverServer.prototype.execScript_ = function(script) {
           }.bind(this)
       ).then( // after timeout
           function() {
+            //stop listening
+            this.isRecordingDevTools_ = false;
+
             if(this.currentStep.logData) { this.currentStep.result = this.devToolsMessages_; }
 
             logger.debug("Written results: " + this.currentStep.result);
@@ -1039,6 +1042,10 @@ WebDriverServer.prototype.execScript_ = function(script) {
 
         this.steps.push(newStep);
         this.currentStep = newStep;
+
+        //start listening
+        this.isRecordingDevTools_ = true;
+
       }.bind(self));
 
       return;
