@@ -1096,6 +1096,8 @@ WebDriverServer.prototype.execScript_ = function(script) {
                 { headers: additionalHeaders });
           }.bind(self)
       );
+
+      return;
     }
 
     // match: "sleep value"
