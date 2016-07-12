@@ -679,6 +679,7 @@ BrowserAndroidChrome.prototype.scheduleStopPacketCapture = function() {
  */
 BrowserAndroidChrome.prototype.scheduleIsAvailable = function() {
   'use strict';
+  logger.debug('scheduleIsAvailable called');
   if (this.checkNet) {
     this.adb_.scheduleDetectConnectedInterface().addErrback(function(e) {
       throw new Error('Device offline: ' + e.message);
