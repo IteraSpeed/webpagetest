@@ -679,7 +679,16 @@ BrowserAndroidChrome.prototype.scheduleStopPacketCapture = function() {
  */
 BrowserAndroidChrome.prototype.scheduleIsAvailable = function() {
   'use strict';
-  logger.debug('scheduleIsAvailable called');
+  // Check ADB first
+  this.adb_.shell(['echo', '1'])
+      .then(function(output) {
+          if (output != "1") {
+            throw new Error("ADB is malfunctioning: " + output);
+          }
+        }.bind(this)
+      ).addErrback(function(e) {
+        throw new Error ('ADB is not available: ' + e.message);
+      });
   if (this.checkNet) {
     this.adb_.scheduleDetectConnectedInterface().addErrback(function(e) {
       throw new Error('Device offline: ' + e.message);

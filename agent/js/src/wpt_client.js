@@ -357,9 +357,7 @@ Client.prototype.onUncaughtException_ = function(e) {
 Client.prototype.requestNextJob_ = function() {
   'use strict';
   this.app_.schedule('Check if agent is ready for new jobs', function() {
-    logger.debug('Check onIsReady');
     if (this.onIsReady) {
-      logger.debug('onIsReady exists and is being called');
       this.onIsReady();
     }
   }.bind(this)).then(function() {
