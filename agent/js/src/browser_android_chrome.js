@@ -682,7 +682,7 @@ BrowserAndroidChrome.prototype.scheduleIsAvailable = function() {
   // Check ADB first
   this.adb_.shell(['echo', '1'])
       .then(function(output) {
-          if (output != "1") {
+          if (output.trim() != "1") {
             throw new Error("ADB is malfunctioning: " + output);
           }
         }.bind(this)
